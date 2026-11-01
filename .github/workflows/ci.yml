@@ -1,0 +1,49 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  cpu-tests:
+    name: cpu tests (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      # The whole point of this repo: the backend conformance suite runs on a
+      # CPU-only runner. If it ever needs a GPU to pass, the claim is false.
+      - name: install (CPU torch)
+        run: |
+          python -m pip install --upgrade pip
+          pip install --index-url https://download.pytorch.org/whl/cpu "torch>=2.6"
+          pip install pytest numpy
+          pip install -e .
+
+      - name: conformance suite
+        run: pytest tests/ -q
+
+      - name: mutation gate (inject broken kernels, require all caught)
+        run: python tests/mutation_gate.py
+
+      - name: backend is importable without registering (no import-time side effects)
+        run: |
+          python -c "
+          import vlab, sys
+          assert not vlab._REGISTERED, 'importing vlab must not register the backend'
+          vlab.register(); vlab.register()
+          import torch
+          assert torch.empty(1, device='vlab').device.type == 'vlab'
+          print('registration is explicit and idempotent')
+          "

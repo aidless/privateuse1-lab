@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vlab"
+version = "0.1.0"
+description = "A hardware-free PyTorch PrivateUse1 backend: every hook point a vendor accelerator plugin must implement, exercised on numpy storage."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Liu Zewen" }]
+keywords = ["pytorch", "privateuse1", "backend", "ascend", "musa", "mlu", "rocm", "accelerator"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = ["torch>=2.6", "numpy>=1.24"]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
