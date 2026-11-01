@@ -17,6 +17,18 @@ torch.softmax(torch.mm(q, q.transpose(-1, -2)) * 0.25, dim=-1).to("cpu")
 
 37 tests, ~0.2 s, plus a mutation gate.
 
+## Quick start
+
+```bash
+pip install -e .                  # installs the `vlab` package (src layout)
+pytest tests/ -q                  # 37 conformance tests
+python tests/mutation_gate.py     # 4-broken-kernel injection gate
+```
+
+`pip install -e .` is what CI runs (CPU-only torch wheel); alternatively
+`PYTHONPATH=src pytest tests/ -q` works without installing. Requires
+`torch>=2.6` and `numpy>=1.24`.
+
 ## The contract, and what each part costs
 
 `torch/utils/backend_registration.py:542` fixes the order: **rename → generate methods → device module → hook → device guard.** Getting it wrong is silent — `torch.<name>.*` just stays missing.
