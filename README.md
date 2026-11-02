@@ -109,6 +109,20 @@ tests/mutation_gate.py      4 injections, records which case catches them
 
 `docs/vendor-hooks.md` maps each duty above to where a shipping plugin does it — `torch_npu/_init/registry/backend.py:47`, `torch_musa/__init__.py:43`, `torch_mlu/__init__.py:48` all call `rename_privateuse1_backend` and keep their own `BackendModule`; `torch_npu` additionally monkey-patches through `patch_manager.py`, and `torch_mlu` generates stubs from `mlu_functions.yaml`. The interesting comparison is not the naming but *which duties each one leaves to C++*.
 
+## Related work (real comparison)
+
+This lab sits next to the real vendor plugins and PyTorch's own backend test, and says explicitly what it is *not*:
+
+| Prior work | Real location | privateuse1-lab's relationship |
+|---|---|---|
+| `torch_npu` (Ascend) | `torch_npu/_init/registry/backend.py:47` | Same `rename_privateuse1_backend` contract; the lab shows the registration *duties* without GPU/SDK |
+| `torch_musa` (Moore Threads) | `torch_musa/__init__.py:43` | Same contract; the lab maps each duty to file:line |
+| `torch_mlu` (Cambricon) | `torch_mlu/__init__.py:48` + `mlu_functions.yaml` | Same contract; the lab notes it generates stubs from yaml |
+| PyTorch `test_backend_simple` | PyTorch pure-python backend test | The lab **does not** assert autograd (upstream disables it, pytorch/pytorch#190232) |
+| Companion `aidless/paged-kv`, `aidless/kv-block-mass` | C++ PagedAttention manager / Triton KV-eviction kernel | The lab is the **conformance** counterpart; they are the performance/engineer side |
+
+**Core difference**: the vendor plugins implement the contract for real silicon with C++ kernels; this lab exercises the **same contract** on numpy storage to answer "what does porting actually require", and measures **conformance, not throughput** (explicit non-claim).
+
 Companions: [`aidless/kv-block-mass`](https://github.com/aidless/kv-block-mass) (a Triton kernel for KV-eviction scoring on CUDA **and** ROCm) and [`aidless/paged-kv`](https://github.com/aidless/paged-kv) (C++ PagedAttention block manager).
 
 MIT.
