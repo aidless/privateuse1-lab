@@ -17,6 +17,24 @@ torch.softmax(torch.mm(q, q.transpose(-1, -2)) * 0.25, dim=-1).to("cpu")
 
 37 tests, ~0.2 s, plus a mutation gate.
 
+## 安装 / Installation
+
+This project uses a `src/` layout, so a fresh clone has no importable `vlab` package. Running pytest straight after `git clone` fails with `ModuleNotFoundError: No module named 'vlab'`. Pick one of the two working paths:
+
+```bash
+# 1) editable install — also pulls torch>=2.6 and numpy>=1.24
+pip install -e .
+
+# 2) no install — put src/ on PYTHONPATH
+PYTHONPATH=src python3 -m pytest -q
+```
+
+Both run the same 37 tests. The CPU-only CI does `pip install -e .` and then `pytest tests/ -q`.
+
+### 环境变量
+
+- `VLAB_DEVICE_COUNT` — number of simulated devices, default `2`. Read once at import time by `src/vlab/_state.py`, so it must be set before `vlab` is imported: `VLAB_DEVICE_COUNT=4 python3 -m pytest -q`.
+
 ## The contract, and what each part costs
 
 `torch/utils/backend_registration.py:542` fixes the order: **rename → generate methods → device module → hook → device guard.** Getting it wrong is silent — `torch.<name>.*` just stays missing.
@@ -27,7 +45,7 @@ torch.softmax(torch.mm(q, q.transpose(-1, -2)) * 0.25, dim=-1).to("cpu")
 | `BackendModule` | device count, current/set device, seeds, memory counters | `vlab/device.py:VlabBackendModule` | ✅ via every `torch.vlab.*` call (measured) |
 | `PrivateUse1Hooks` | `is_available` / `is_built` / `has_primary_context` | `vlab/device.py:VlabHook` | ❌ **not reached from any python-level path** (measured, see below) |
 | `DeviceGuard` | answers "which device type am I" during dispatch | `vlab/device.py:VlabGuard` | ✅ on `.to(device)` (measured) |
-| op set | `aten::*` kernels registered under `privateuseone` | `vlab/ops.py` (24 ops) | ✅ via dispatch |
+| op set | `aten::*` kernels registered under `privateuseone` | `vlab/ops.py` (39 ops) | ✅ via dispatch |
 
 ### The reachability finding
 
@@ -46,7 +64,9 @@ The device *guard*, by contrast, is real: `.to("vlab")` reaches it, and `guard.t
 
 ## Op set: small, but closed
 
-24 kernels: factories (`empty.memory_format`, `empty_strided`, `zeros`, `ones`, `randn`), movement (`_copy_from`, `copy_`, `detach`, `clone`), views (`view`, `_unsafe_view`, `as_strided`, `expand`, `transpose.int`, `t`), elementwise (`add`/`sub`/`mul`/`div` .Tensor+.Scalar, `neg`, `exp`, `relu`, `pow` ×3), reductions (`sum`, `sum.dim_IntList`, `max.dim`), and `softmax.int`, `mm`, `matmul`, `bmm`.
+39 kernels: factories (`empty.memory_format`, `empty_strided`, `zeros`, `ones`, `randn`), data movement (`_copy_from`, `detach`, `clone`), views (`view`, `_unsafe_view`, `as_strided`, `expand`, `transpose.int`, `t`), elementwise (`add`/`sub`/`mul`/`div` .Tensor+.Scalar, `neg`, `exp`, `relu`, `pow` ×4), reductions (`sum`, `sum.dim_IntList`, `max.dim`), softmax / gemm (`softmax.int`, `mm`, `matmul`, `bmm`), and in-place (`fill_.Scalar`, `zero_`, `copy_`).
+
+Count them yourself: `grep -c '@torch.library.impl' src/vlab/ops.py` → `39`.
 
 "Small but closed" means the set is exactly what a **scaled-dot-product attention block** needs, so `tests/test_attention_e2e.py` runs that block end-to-end on the fake device and compares against CPU torch — including a 2×3×24×16 multi-head batch. A hole in the op set fails that test rather than a user's model.
 
@@ -59,6 +79,12 @@ Three things this lab learned by being run, all of which are ordinary vendor-plu
 ## The mutation gate
 
 `tests/mutation_gate.py` replaces `vlab.kernels.*` with four broken variants and requires the oracle (CPU torch) to catch each one. It also prints which case caught it, because a mutation visible in only one case tells you where a test suite is blind:
+
+```
+python3 tests/mutation_gate.py
+```
+
+It is a script, not a `test_*.py` module, so pytest never collects it — run it explicitly. Exit code 0 means every injection was caught and the control matched the oracle on all four cases. Without an editable install, prefix it with `PYTHONPATH=src`.
 
 ```
 control (no bug): all 4 cases match CPU oracle -> PASSED
@@ -85,7 +111,7 @@ src/vlab/__init__.py    registration in the mandated order (idempotent)
 src/vlab/device.py      BackendModule + PrivateUse1Hooks + DeviceGuard, all call-recorded
 src/vlab/tensor.py      numpy-backed tensor (create_empty_tensor + __class__ swap)
 src/vlab/kernels.py     pure numpy math, no torch — the mutation targets
-src/vlab/ops.py         24 aten kernels, thin wrappers over kernels
+src/vlab/ops.py         39 aten kernels, thin wrappers over kernels
 tests/test_registration.py  rename vs dispatch key, generated methods, missing-kernel loudness
 tests/test_ops.py           numeric parity vs CPU, view aliasing, copy directions
 tests/test_attention_e2e.py attention block on-device vs CPU
