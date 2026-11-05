@@ -1,14 +1,12 @@
-"""vlab — a hardware-free PyTorch PrivateUse1 backend.
+"""vlab — numpy storage behind PyTorch's PrivateUse1 Python registration API.
 
-Why this exists: adapting PyTorch to a new accelerator (Ascend NPU, MUSA, MLU,
-or any domestic GPGPU) means implementing one backend contract — device rename,
-three hook objects, and a `privateuseone` op set. The contract is exercised here
-with numpy storage, so the whole checklist runs on a laptop in ~2 seconds, with
-no GPU, no driver, and no vendor SDK.
+Call ``register()`` before using ``device="vlab"``. Registration is explicit
+and idempotent. This package is a CPU-only teaching stand-in, not a hardware
+backend.
 
 Usage:
     import vlab
-    vlab.register()                       # idempotent
+    vlab.register()
     t = torch.empty(2, 3, device="vlab")
 """
 
@@ -38,10 +36,9 @@ _REGISTERED = False
 def register(name: str = _DEVICE_NAME) -> str:
     """Attach the vlab backend to the PrivateUse1 dispatch key (idempotent).
 
-    Order matters and is fixed by torch/utils/backend_registration.py:542:
-    rename -> generate methods -> device module -> hook -> device guard.
-    Calling `_setup_privateuseone_for_python_backend` performs all five in that
-    order; doing it by hand in another order leaves `torch.vlab.*` unmapped.
+    ``_setup_privateuseone_for_python_backend`` renames, generates methods, then
+    registers the module, hook, and guard. Calling the pieces out of that order
+    is not the same failure every time; see docs/FAILURE_MODES.md.
     """
     global _REGISTERED, _DEVICE_NAME
     if _REGISTERED:

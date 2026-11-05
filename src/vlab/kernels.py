@@ -53,10 +53,10 @@ def relu_np(x: np.ndarray) -> np.ndarray:
 
 
 def attention_block_np(q: np.ndarray, k: np.ndarray, v: np.ndarray, scale: float):
-    """One scaled-dot-product attention block, expressed only through kernels.
+    """Scaled-dot-product attention on numpy arrays.
 
-    q [B, H, N, D], k/v [B, H, M, D]. Returns (out, probs) so tests can compare
-    both the intermediate probabilities and the final result.
+    ``tests/test_attention_e2e.py`` does not call this helper. That test runs
+    the block through torch dispatch and compares with CPU torch.
     """
     scores = mm_np(q, transpose_np(k, -1, -2)) * scale
     probs = softmax_np(scores, axis=-1)

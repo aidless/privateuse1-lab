@@ -31,6 +31,9 @@ jobs:
           pip install pytest numpy
           pip install -e .
 
+      # pytest collects tests/test_*.py only. That includes the README count
+      # check and the registration failure-mode subprocesses. mutation_gate.py
+      # is a script, so the next step runs it explicitly.
       - name: conformance suite
         run: pytest tests/ -q
 
