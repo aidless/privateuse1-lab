@@ -1,15 +1,14 @@
 """The three non-op hook points PyTorch requires of a PrivateUse1 backend.
 
 `_setup_privateuseone_for_python_backend` registers exactly three things besides
-the device rename (torch/utils/backend_registration.py:542):
+the device rename:
 
   1. a backend module  -> `torch._register_device_module(name, module)`
   2. a PrivateUse1Hooks object -> `torch._C._acc.register_python_privateuseone_hook`
   3. a DeviceGuard     -> `torch._C._acc.register_python_privateuseone_device_guard`
 
-PyTorch ships dummy versions of all three that report one healthy device. Using
-the dummies silently hides every question a real backend has to answer, so this
-lab implements them for real (still on numpy, no hardware).
+PyTorch ships dummy versions of all three. The dummy backend module reports a
+single device. This lab supplies its own three objects. Storage stays numpy.
 """
 
 from __future__ import annotations

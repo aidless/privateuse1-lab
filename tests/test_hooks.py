@@ -3,9 +3,10 @@
 Registration requires a backend module, a PrivateUse1Hooks object and a
 DeviceGuard. Registration succeeding says nothing about *reachability*: each hook
 can be a no-op that never fires. These tests record real calls (`vlab.CALLS`) so
-the claim is measured, and they encode the gap found in torch 2.14.1: the device
-guard is reached by `.to(device)`, the backend module by `torch.vlab.*`, and the
-PrivateUse1Hooks object is **not reached at all** from python-level paths.
+the claim is measured on whatever torch this process imported. CI installs
+``torch>=2.6`` from the CPU wheel index and does not pin a patch version. The
+device guard is reached by ``.to(device)``, the backend module by ``torch.vlab.*``,
+and the PrivateUse1Hooks object is not reached from the python paths below.
 """
 
 import pytest

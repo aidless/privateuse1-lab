@@ -1,20 +1,9 @@
-"""Op registrations for the vlab PrivateUse1 backend.
+"""Op registrations for the vlab PrivateUse1 dispatch key.
 
-Every function below is dispatched to only when a tensor lives on the
-PrivateUse1 device, so `torch.library.impl(..., "privateuseone")` is the whole
-"port a kernel" surface. The set is deliberately small but *closed*: it is the
-exact list needed to run a transformer attention block end-to-end on the fake
-device and compare it bit-for-bit against CPU (tests/test_attention_e2e.py).
-
-Notes for anyone porting a real accelerator:
-  * `empty.memory_format` / `empty_strided` are the two factories; if either is
-    missing, `torch.empty(..., device="vlab")` raises "not implemented for
-    'PrivateUse1'".
-  * `_copy_from` is both directions (host->device and device->host) and is where
-    a real backend would do cudaMemcpy / hipMemcpy / a host-mapped write.
-  * views (`view`, `as_strided`, `expand`, `transpose`) return tensors that share
-    the parent's numpy buffer — aliasing is real, so an in-place op through a
-    view is visible in the base tensor, as on a real device.
+Each function is a ``torch.library.impl(..., "privateuseone")`` kernel. The
+attention test drives a subset of them through torch and compares to CPU torch
+within a float32 tolerance (``tests/test_attention_e2e.py``). It does not cover
+every function in this file. Known holes are listed in ``docs/FAILURE_MODES.md``.
 """
 
 from __future__ import annotations
@@ -63,6 +52,7 @@ def empty_memory_format(
 
 @torch.library.impl("aten::empty_strided", "privateuseone")
 def empty_strided(size, stride, *, dtype=None, layout=None, device=None, pin_memory=None):
+    # `stride` is ignored. The buffer is a contiguous allocation of `size`.
     return _alloc(tuple(size), dtype)
 
 
@@ -78,9 +68,9 @@ def ones(size, *, dtype=None, layout=None, device=None, pin_memory=None):
 
 @torch.library.impl("aten::randn", "privateuseone")
 def randn(size, *, dtype=None, layout=None, device=None, pin_memory=None):
-    # numpy's *legacy* global RNG, seeded through torch.vlab.manual_seed_all,
-    # so `vlab.manual_seed_all(s)` makes this reproducible. A real backend reads
-    # its generator's Philox state here instead.
+    # Reseeds numpy's legacy global RNG from the stored seed on every call.
+    # `manual_seed_all` therefore repeats the same draw; it does not advance a
+    # generator. See docs/FAILURE_MODES.md.
     np.random.seed(_state.get_seed())
     arr = np.random.randn(*tuple(size)).astype(_numpy_dtype(dtype or torch.float32))
     _state.record_alloc(arr.nbytes)
@@ -222,6 +212,7 @@ def pow_tensor_scalar(a, b):
 
 @torch.library.impl("aten::pow.Tensor_Scalar_out", "privateuseone")
 def pow_tensor_scalar_out(a, b, out=None):
+    # `out` is ignored. This returns a new tensor.
     return wrap(np.power(unwrap(a), b))
 
 
@@ -252,8 +243,8 @@ def sum_dim(self, dim, keepdim=False, *, dtype=None):
 def max_dim(self, dim, keepdim=False):
     idx = self.raw.argmax(axis=int(dim))
     vals = self.raw.max(axis=int(dim), keepdims=bool(keepdim))
-    idx_t = idx if keepdim else idx
-    return wrap(np.asarray(vals)), wrap(np.asarray(idx_t, dtype=np.int64))
+    # `keepdim` changes the value rank only. Index rank is unchanged.
+    return wrap(np.asarray(vals)), wrap(np.asarray(idx, dtype=np.int64))
 
 
 # ------------------------------------------------------------- softmax / gemm

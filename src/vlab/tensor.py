@@ -1,10 +1,9 @@
 """A numpy-backed vlab tensor: the storage half of a PyTorch PrivateUse1 backend.
 
 `torch._C._acc.create_empty_tensor(size, dtype)` mints a tensor that belongs to
-the PrivateUse1 device type but has no storage of its own; whatever the backend
-calls "device memory" is attached here as `_raw` (a numpy array). Every op the
-backend registers reads and writes `_raw`. This mirrors what a vendor plugin
-does with a real allocator, minus the hardware.
+the PrivateUse1 device type but has no storage of its own. The numpy array in
+`_raw` is the stand-in for device memory. Ops in this package read and write
+that array.
 """
 
 from __future__ import annotations

@@ -1,128 +1,121 @@
 # privateuse1-lab
 
-[![ci](https://github.com/aidless/privateuse1-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/aidless/privateuse1-lab/actions/workflows/ci.yml)
+PyTorch's Python entry for a new device is the PrivateUse1 registration helper: rename the device, generate methods, pass a backend module, a hooks object, and a device guard, then register `aten` kernels.
+This repo does that on numpy arrays, so the same steps run on a CPU with no GPU and no vendor SDK.
+It is a small teaching tree for that Python contract, with tests for a few ways the contract fails.
 
-**A hardware-free PyTorch `PrivateUse1` backend, built to answer one question: what does "port PyTorch to a new accelerator" actually require?**
+There is no PyPI release and no status badge. The workflow file is [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
-Every vendor plugin — `torch_npu` (Ascend), `torch_musa` (Moore Threads), `torch_mlu` (Cambricon), and any domestic GPGPU effort — implements the same backend contract. That contract is small enough to exercise on numpy storage, with no GPU, no driver and no vendor SDK: registration, three hook objects, and a `privateuseone` op set. This repo implements all of it and pins each piece with a test that can fail.
+## Fifteen-minute CPU path
 
-```python
-import torch, vlab
-vlab.register()
-a = torch.ones(2, 3, device="vlab")        # a tensor on the fake device
-b = (a @ torch.ones(3, 4, device="vlab"))  # dispatched vlab kernels
-q = torch.randn(8, 16).to("vlab")
-torch.softmax(torch.mm(q, q.transpose(-1, -2)) * 0.25, dim=-1).to("cpu")
-```
+The first install downloads a CPU torch wheel and needs a network. After that, pytest and the mutation gate do not use the network, a GPU, or a vendor SDK. On a fast link the download is the long step; the tests themselves finish in seconds. Python 3.10 or 3.12 matches CI.
 
-37 tests, ~0.2 s, plus a mutation gate.
-
-## 安装 / Installation
-
-This project uses a `src/` layout, so a fresh clone has no importable `vlab` package. Running pytest straight after `git clone` fails with `ModuleNotFoundError: No module named 'vlab'`. Pick one of the two working paths:
+From a fresh clone, `src/` is not on the import path, so `import vlab` raises `ModuleNotFoundError` until you install it or set `PYTHONPATH`.
 
 ```bash
-# 1) editable install — also pulls torch>=2.6 and numpy>=1.24
+pip install --index-url https://download.pytorch.org/whl/cpu "torch>=2.6"
+pip install pytest numpy
 pip install -e .
+pytest tests/ -q
+python tests/mutation_gate.py
+```
 
-# 2) no install — put src/ on PYTHONPATH
+CI runs these five commands after `python -m pip install --upgrade pip`, on Python 3.10 and Python 3.12. Use `python3 -m pip` and `python3 -m pytest` when the console scripts are not on `PATH`. A passing mutation gate prints `MUTATION GATE PASSED` and exits 0.
+
+`mutation_gate.py` is not named `test_*.py`, so pytest does not collect it. CI runs it in the next step. The workflow then runs one more snippet: import `vlab`, assert `_REGISTERED` is false, call `register()` twice, and build a `vlab` tensor. Local pytest does not run that snippet.
+
+If you skip the editable install:
+
+```bash
 PYTHONPATH=src python3 -m pytest -q
+PYTHONPATH=src python3 tests/mutation_gate.py
 ```
 
-Both run the same 37 tests. The CPU-only CI does `pip install -e .` and then `pytest tests/ -q`.
+Torch, numpy, and pytest still have to be installed. `VLAB_DEVICE_COUNT` is read when `vlab` is imported (default `2`). Set it before the import: `VLAB_DEVICE_COUNT=4 PYTHONPATH=src python3 -c "import vlab; print(vlab.device_count())"`.
 
-### 环境变量
+Then read [`docs/FAILURE_MODES.md`](docs/FAILURE_MODES.md). That is the list of contract breaks the suite catches, and the holes it does not.
 
-- `VLAB_DEVICE_COUNT` — number of simulated devices, default `2`. Read once at import time by `src/vlab/_state.py`, so it must be set before `vlab` is imported: `VLAB_DEVICE_COUNT=4 python3 -m pytest -q`.
+## What pytest collects, and what CI adds
 
-## The contract, and what each part costs
+| | `pytest tests/` locally | CI |
+|---|---|---|
+| Files | every `tests/test_*.py` | the same, on CPython 3.10 and 3.12 |
+| `tests/mutation_gate.py` | not collected | `python tests/mutation_gate.py` |
+| Import must not register | not run | `python -c` checks `vlab._REGISTERED` |
+| Torch | whatever already satisfies `torch>=2.6` | unpinned `torch>=2.6` from `https://download.pytorch.org/whl/cpu` |
+| GPU | not used | not used |
 
-`torch/utils/backend_registration.py:542` fixes the order: **rename → generate methods → device module → hook → device guard.** Getting it wrong is silent — `torch.<name>.*` just stays missing.
+The CPU index is only in the install step. `pip install -e .` keeps that torch when it already satisfies `>=2.6`. A later pip that upgrades torch from PyPI can replace it with a different build. CI does not pin the patch version. Hook reachability is whatever the installed torch does, and `tests/test_hooks.py` fails if the recorded calls change.
 
-| Piece | What it is | Where it lives here | Reached by PyTorch? |
-|---|---|---|---|
-| `rename_privateuse1_backend(name)` | the *device* name (`vlab`), not the dispatch key | `vlab/__init__.py:register` | — |
-| `BackendModule` | device count, current/set device, seeds, memory counters | `vlab/device.py:VlabBackendModule` | ✅ via every `torch.vlab.*` call (measured) |
-| `PrivateUse1Hooks` | `is_available` / `is_built` / `has_primary_context` | `vlab/device.py:VlabHook` | ❌ **not reached from any python-level path** (measured, see below) |
-| `DeviceGuard` | answers "which device type am I" during dispatch | `vlab/device.py:VlabGuard` | ✅ on `.to(device)` (measured) |
-| op set | `aten::*` kernels registered under `privateuseone` | `vlab/ops.py` (39 ops) | ✅ via dispatch |
+## Counts checked by pytest
 
-### The reachability finding
-
-Registration succeeding proves nothing about whether a hook is ever *called*. `tests/test_hooks.py` records real calls (`vlab.CALLS`) and asserts what actually happens on torch 2.14.1:
+`tests/test_readme_counts.py` recomputes these three lines and fails if the README drifts. It does not rewrite the file. The numbers are not a speed or a torch-version claim.
 
 ```
-.to(device)            -> guard.type_
-torch.vlab.is_available / device_count / set_device / manual_seed_all -> backend.*
-torch.empty / elementwise ops / create_empty_tensor -> (nothing)
-PrivateUse1Hooks.*     -> never reached from python
+Collected pytest tests: 48
+Registered aten impls: 39
+Mutation injections: 4
 ```
 
-So: a backend can ship a hook object whose every method returns garbage and no Python-level test would notice. That is exactly the class of bug that only shows up as a runtime failure deep inside C++ lazy-initialisation paths. The test for it is written as a *documented gap* — it fails if a future torch starts calling the hooks, forcing the table above to be corrected instead of quietly rotting.
+`Registered aten impls` is the number of `@torch.library.impl` decorators in `src/vlab/ops.py`. Recount with `grep -c '@torch.library.impl' src/vlab/ops.py`.
 
-The device *guard*, by contrast, is real: `.to("vlab")` reaches it, and `guard.type_()` returning `PrivateUse1` is what makes the transfer land on our kernels.
+## What this does not prove
 
-## Op set: small, but closed
+- No hardware. Storage is a numpy array. Nothing here shows a driver, an allocator, or a copy to a device.
+- No C++ registration (`TORCH_LIBRARY_IMPL`) and no torch extension library.
+- No autograd. Upstream's Python backend test skips `test_backend_simple` and cites [pytorch/pytorch#190232](https://github.com/pytorch/pytorch/issues/190232). This repo does not register a backward.
+- No `torch.compile`, no faketensor meta kernels, and no `torch.testing._internal.optests.opcheck`.
+- No device generator. `manual_seed_all` stores an integer. `randn` reseeds numpy from that integer on every call, so two draws in a row match. That is not Philox state advancing.
+- Not every registered op is checked. The attention tests cover matmul, scale, softmax, and matmul. `empty_strided` ignores `stride`, `max.dim` does not apply `keepdim` to indices, and `pow.Tensor_Scalar_out` ignores `out`. Details are in [`docs/FAILURE_MODES.md`](docs/FAILURE_MODES.md).
+- Gemm is not bit-exact. `mm` / `bmm` / attention comparisons use `rtol=1e-4, atol=1e-5` because numpy and CPU torch float32 matmul differ in the last few ulps.
+- `PrivateUse1Hooks` can return the wrong answer and the Python paths in `tests/test_hooks.py` still pass. A direct call checks the object. A C++ lazy-init path is not run.
+- [`docs/vendor-hooks.md`](docs/vendor-hooks.md) records a file fetch from 2026-11-05. CI does not re-fetch those repos. This tree does not track their versions or star counts.
+- Wall-clock time is not a claim. Do not treat a local timing as part of the contract.
 
-39 kernels: factories (`empty.memory_format`, `empty_strided`, `zeros`, `ones`, `randn`), data movement (`_copy_from`, `detach`, `clone`), views (`view`, `_unsafe_view`, `as_strided`, `expand`, `transpose.int`, `t`), elementwise (`add`/`sub`/`mul`/`div` .Tensor+.Scalar, `neg`, `exp`, `relu`, `pow` ×4), reductions (`sum`, `sum.dim_IntList`, `max.dim`), softmax / gemm (`softmax.int`, `mm`, `matmul`, `bmm`), and in-place (`fill_.Scalar`, `zero_`, `copy_`).
+## When registration is wrong
 
-Count them yourself: `grep -c '@torch.library.impl' src/vlab/ops.py` → `39`.
+Full table: [`docs/FAILURE_MODES.md`](docs/FAILURE_MODES.md). The short version, from tests:
 
-"Small but closed" means the set is exactly what a **scaled-dot-product attention block** needs, so `tests/test_attention_e2e.py` runs that block end-to-end on the fake device and compares against CPU torch — including a 2×3×24×16 multi-head batch. A hole in the op set fails that test rather than a user's model.
+- No `register()`: `torch.empty(..., device="vlab")` raises `RuntimeError` and names `privateuseone`.
+- Device module registered before the rename: `RuntimeError`, and that call does not create `torch.vlab`.
+- `generate_methods_for_privateuse1_backend()` before the rename: no exception, `Tensor.is_privateuseone` exists, `torch.vlab` does not.
+- Setup with torch's dummy module and no kernels: `torch.vlab.device_count()` is `1`, and `empty` raises `NotImplementedError` (`Could not run`, `empty.memory_format`).
+- Guard `type_()` returns CPU while kernels exist: `.to("vlab")` stays on `cpu` and does not raise.
+- Hooks object returns false while kernels exist: `empty` and `.to("vlab")` still yield `vlab` tensors, and the hook methods are not called.
+- Missing op (`torch.sort`): `NotImplementedError` containing `Could not run` and `vlab`, not a silent CPU result.
 
-Three things this lab learned by being run, all of which are ordinary vendor-plugin bugs:
+`_setup_privateuseone_for_python_backend` performs rename, then method generation, then the module, the hook, and the guard. The rows above are the mis-orders and substitutions the tests run. They are not every possible order.
 
-1. **Wrapped python scalars land on the `Tensor` overload.** `t + 2.5` dispatches `aten::add.Tensor` with `b` a bare `float`, not `aten::add.Scalar`. A kernel that calls `unwrap(b)` raises `TypeError: unsupported operand type(s) for +: 'VlabTensor' and 'float'` — the operator silently refuses the device. `vlab/ops.py:_val` accepts tensor, 0-dim CPU tensor and plain number.
-2. **Views must alias, not copy.** `np.ascontiguousarray` inside the tensor wrapper turns `expand`/`view`/`transpose` results into independent copies, so writes through a view disappear. After the fix, writing through `view` is visible in the base (tested), and writing through an `expand`ed view raises — matching PyTorch, which refuses in-place writes on overlapping memory.
-3. **0-dim results break host copies.** `sum(x)` returns a 0-dim tensor; `torch.from_numpy(np.ascontiguousarray(arr))` turns the 0-dim array into shape `(1,)` and the copy fails with `output with shape [] doesn't match the broadcast shape [1]`.
+## What the numerical tests cover
 
-## The mutation gate
+`tests/test_ops.py` compares a fixed elementwise list, sum, softmax, copy, view aliasing, clone versus detach, and a reseeded `randn` to CPU torch. `tests/test_attention_e2e.py` runs scaled-dot-product attention, including a `2×3×24×16` batch, through dispatch.
 
-`tests/mutation_gate.py` replaces `vlab.kernels.*` with four broken variants and requires the oracle (CPU torch) to catch each one. It also prints which case caught it, because a mutation visible in only one case tells you where a test suite is blind:
+Three kernel constraints the tests are aimed at:
 
-```
-python3 tests/mutation_gate.py
-```
+1. Wrapped Python scalars hit the Tensor overload. `t + 2.5` dispatches `aten::add.Tensor` with a float. `_val` accepts a vlab tensor, a CPU tensor, or a plain number.
+2. `view` aliases the base buffer (`test_writable_views_alias_the_base_tensor`). An in-place write through `expand` raises (`test_write_through_expanded_view_is_rejected_not_silently_applied`).
+3. A 0-dim `sum` is copied back with `np.asarray`. `np.ascontiguousarray` on a 0-dim array has shape `(1,)`, which does not copy into a 0-dim tensor. `test_sum_matches_cpu_including_axis_and_keepdim` covers that host copy.
 
-It is a script, not a `test_*.py` module, so pytest never collects it — run it explicitly. Exit code 0 means every injection was caught and the control matched the oracle on all four cases. Without an editable install, prefix it with `PYTHONPATH=src`.
-
-```
-control (no bug): all 4 cases match CPU oracle -> PASSED
-SOFTMAX_NO_MAXSHIFT      -> CAUGHT by ['softmax_large_logits']  (NOT visible in ['mm', 'softmax', 'sum_dim'])
-SOFTMAX_WRONG_AXIS       -> CAUGHT by ['softmax', 'softmax_large_logits']  (NOT visible in ['mm', 'sum_dim'])
-MM_TRANSPOSED_OPERAND    -> CAUGHT by ['mm']
-SUM_WRONG_AXIS           -> CAUGHT by ['sum_dim']
-```
-
-The first line is the one worth reading. Softmax is shift-invariant, so **no value comparison at ordinary logits can see a missing max-shift** — the mutation survives a plain `allclose(softmax(x), cpu_softmax(x))` at any sane input scale, and only separates at `exp`-overflow scale (logits ≈ 200 > float32's 88). A softmax test that checks values and stops there is decorative.
-
-## What this does *not* claim
-
-- **No autograd.** PyTorch's own pure-python backend test skips `test_backend_simple` (autograd + `backward()`) with *"Disabled due to CI failures; see pytorch/pytorch#190232"*. The autograd path for a python backend is not upstream-guaranteed, so this lab does not assert it. A real plugin (torch_npu/torch_musa) implements autograd through C++ fallback kernels instead.
-- **No `faketensor`/`torch.compile` support.** `torch.library.opcheck` meta-kernel tests are out of scope; Dynamo tracing on this backend is untested. PyTorch's own test disables Dynamo around its assertions for the same reason.
-- **No generator (Philox) object.** `manual_seed_all` reseeds numpy's legacy RNG so `torch.randn(device="vlab")` is reproducible (tested), but that is not a device generator and does not reduce/advance like one.
-- **Not a performance claim.** numpy storage means every "kernel" is a host call; this repo measures conformance, not throughput.
-- **Not the C++ path.** A production backend registers kernels via `TORCH_LIBRARY_IMPL(aten, PrivateUse1, m)` in C++ and builds a `torch` stub library. The registration *duties* are identical; the mechanisms differ. `docs/vendor-hooks.md` maps each duty to a file:line in the real vendor plugins.
+`tests/mutation_gate.py` patches four functions in `vlab.kernels` and requires CPU torch to disagree, or the call to raise. The control run with the real kernels must agree. One injection drops the softmax max-shift. Softmax is shift-invariant, so ordinary logits can still match; the gate includes a case with logits `200`. The script prints which case caught which injection. That caught-by list is output, not a second count frozen here.
 
 ## Layout
 
 ```
-src/vlab/__init__.py    registration in the mandated order (idempotent)
-src/vlab/device.py      BackendModule + PrivateUse1Hooks + DeviceGuard, all call-recorded
-src/vlab/tensor.py      numpy-backed tensor (create_empty_tensor + __class__ swap)
-src/vlab/kernels.py     pure numpy math, no torch — the mutation targets
-src/vlab/ops.py         39 aten kernels, thin wrappers over kernels
-tests/test_registration.py  rename vs dispatch key, generated methods, missing-kernel loudness
-tests/test_ops.py           numeric parity vs CPU, view aliasing, copy directions
-tests/test_attention_e2e.py attention block on-device vs CPU
-tests/test_hooks.py         which hooks are actually reached (measured)
-tests/mutation_gate.py      4 injections, records which case catches them
+src/vlab/__init__.py        register(), explicit and idempotent
+src/vlab/device.py          backend module, PrivateUse1Hooks, device guard
+src/vlab/tensor.py          numpy array on a PrivateUse1 tensor
+src/vlab/kernels.py         numpy math the mutation gate patches
+src/vlab/ops.py             aten impls (count checked above)
+src/vlab/_state.py          simulated device count, seed, byte counter
+tests/test_registration.py  rename, generated methods, missing-kernel error
+tests/test_ops.py           parity, views, copies
+tests/test_attention_e2e.py attention block versus CPU torch
+tests/test_hooks.py         which registered objects are called
+tests/test_failure_modes.py contract breaks in fresh interpreters
+tests/test_readme_counts.py README counts and CI command lines
+tests/mutation_gate.py      four kernel injections; not collected by pytest
+docs/FAILURE_MODES.md       symptoms and known holes
+docs/vendor-hooks.md        dated file fetch of three vendor rename sites
 ```
-
-## Reference for a real port
-
-`docs/vendor-hooks.md` maps each duty above to where a shipping plugin does it — `torch_npu/_init/registry/backend.py:47`, `torch_musa/__init__.py:43`, `torch_mlu/__init__.py:48` all call `rename_privateuse1_backend` and keep their own `BackendModule`; `torch_npu` additionally monkey-patches through `patch_manager.py`, and `torch_mlu` generates stubs from `mlu_functions.yaml`. The interesting comparison is not the naming but *which duties each one leaves to C++*.
-
-Companions: [`aidless/kv-block-mass`](https://github.com/aidless/kv-block-mass) (a Triton kernel for KV-eviction scoring on CUDA **and** ROCm) and [`aidless/paged-kv`](https://github.com/aidless/paged-kv) (C++ PagedAttention block manager).
 
 MIT.

@@ -1,9 +1,9 @@
-"""End-to-end: a real attention block computed on the vlab device, checked against CPU.
+"""Scaled-dot-product attention on the vlab device, compared with CPU torch.
 
-This is the test that makes the op set "closed" instead of a pile of unit tests:
-scaled dot-product attention (matmul -> scale -> softmax -> matmul) runs entirely
-through dispatched vlab kernels, and the result must match CPU torch. If one
-kernel in the chain is wrong, or the op set has a hole, this fails.
+The block is matmul, scale, softmax, matmul, all through dispatched vlab kernels.
+Agreement is ``rtol=1e-4, atol=1e-5`` because the gemm is numpy, not libtorch.
+A wrong kernel or a missing op in this chain fails the test. Ops outside the
+chain are not covered here.
 """
 
 import numpy as np
@@ -24,7 +24,7 @@ def _attention_device(q, k, v, scale):
     return torch.mm(probs, v), probs
 
 
-def test_softmax_attention_block_matches_cpu_bitwise_path():
+def test_softmax_attention_block_matches_cpu():
     torch.manual_seed(0)
     for shape in [(8, 16), (48, 32)]:  # (N, D)
         N, D = shape
@@ -36,8 +36,8 @@ def test_softmax_attention_block_matches_cpu_bitwise_path():
         )
         got_probs = vlab.to_numpy(probs_dev)
         got_out = vlab.to_numpy(out_dev)
-        assert np.allclose(got_probs, probs_cpu.numpy(), rtol=1e-5, atol=1e-7)
-        assert np.allclose(got_out, out_cpu.numpy(), rtol=1e-5, atol=1e-7)
+        assert np.allclose(got_probs, probs_cpu.numpy(), rtol=1e-4, atol=1e-5)
+        assert np.allclose(got_out, out_cpu.numpy(), rtol=1e-4, atol=1e-5)
         # attention rows are distributions — a shape-correct but unnormalised
         # kernel would still pass an allclose against itself, not against CPU
         assert np.allclose(got_probs.sum(axis=-1), 1.0, rtol=1e-5)
@@ -54,7 +54,7 @@ def test_batched_multi_head_attention_matches_cpu():
     scores = torch.matmul(q_d, k_d.transpose(-1, -2)) * scale
     probs = torch.softmax(scores, dim=-1)
     out_d = torch.matmul(probs, v_d)
-    assert np.allclose(vlab.to_numpy(out_d), out_cpu.numpy(), rtol=1e-5, atol=1e-7)
+    assert np.allclose(vlab.to_numpy(out_d), out_cpu.numpy(), rtol=1e-4, atol=1e-5)
 
 
 def test_value_only_check_is_not_enough_for_softmax(tmp_path):
