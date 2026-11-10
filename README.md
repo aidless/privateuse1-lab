@@ -76,6 +76,52 @@ Three things this lab learned by being run, all of which are ordinary vendor-plu
 2. **Views must alias, not copy.** `np.ascontiguousarray` inside the tensor wrapper turns `expand`/`view`/`transpose` results into independent copies, so writes through a view disappear. After the fix, writing through `view` is visible in the base (tested), and writing through an `expand`ed view raises — matching PyTorch, which refuses in-place writes on overlapping memory.
 3. **0-dim results break host copies.** `sum(x)` returns a 0-dim tensor; `torch.from_numpy(np.ascontiguousarray(arr))` turns the 0-dim array into shape `(1,)` and the copy fails with `output with shape [] doesn't match the broadcast shape [1]`.
 
+## 验证结果（Results）
+
+### 测试套件实测（2026-11-10，本机 Python 3.12 + torch 2.x，`PYTHONPATH=src python3 -m pytest -q`）
+
+```text
+$ PYTHONPATH=src python3 -m pytest -q
+.....................................                                    [100%]
+37 passed in 0.27s
+```
+
+| 测试文件 | 收集用例数（含参数化） | 覆盖内容 |
+|---|---:|---|
+| `tests/test_registration.py` | 5 | rename vs dispatch key、生成方法、缺 kernel 报错响度 |
+| `tests/test_ops.py` | 20 | 数值 parity vs CPU、view 别名、copy 方向 |
+| `tests/test_hooks.py` | 9 | 各 hook 是否真的被调用（measured reachability） |
+| `tests/test_attention_e2e.py` | 3 | SDPA 块端到端 vs CPU（含 2×3×24×16 多头 batch） |
+| **合计** | **37** | 全部通过，0.27 s |
+
+### Mutation gate 实测（`PYTHONPATH=src python3 tests/mutation_gate.py`）
+
+```text
+control (no bug): all 4 cases match CPU oracle -> PASSED
+SOFTMAX_NO_MAXSHIFT      -> CAUGHT by ['softmax_large_logits']
+SOFTMAX_WRONG_AXIS       -> CAUGHT by ['softmax', 'softmax_large_logits']
+MM_TRANSPOSED_OPERAND    -> CAUGHT by ['mm']
+SUM_WRONG_AXIS           -> CAUGHT by ['sum_dim']
+MUTATION GATE PASSED: 4 injections caught, control matches on all 4 cases
+```
+
+### Op 覆盖表（`src/vlab/ops.py`，共 39 个 `@torch.library.impl`）
+
+| 类别 | kernels | 数量 |
+|---|---|---:|
+| Factories | `empty.memory_format`, `empty_strided`, `zeros`, `ones`, `randn` | 5 |
+| 数据搬运 | `_copy_from`, `detach`, `clone` | 3 |
+| Views | `view`, `_unsafe_view`, `as_strided`, `expand`, `transpose.int`, `t` | 6 |
+| Elementwise | `add`/`sub`/`mul`/`div` (.Tensor+.Scalar), `neg`, `exp`, `relu`, `pow` ×4 | 15 |
+| Reductions | `sum`, `sum.dim_IntList`, `max.dim` | 3 |
+| Softmax / GEMM | `softmax.int`, `mm`, `matmul`, `bmm` | 4 |
+| In-place | `fill_.Scalar`, `zero_`, `copy_` | 3 |
+| **合计** | | **39** |
+
+复核命令：`grep -c '@torch.library.impl' src/vlab/ops.py` → `39`（2026-11-10 实测）。
+该集合恰好覆盖一个 **scaled-dot-product attention block** 的全部 op 需求——
+op 集合的任何缺口都会让 `tests/test_attention_e2e.py` 失败，而不是让用户模型失败。
+
 ## The mutation gate
 
 `tests/mutation_gate.py` replaces `vlab.kernels.*` with four broken variants and requires the oracle (CPU torch) to catch each one. It also prints which case caught it, because a mutation visible in only one case tells you where a test suite is blind:
