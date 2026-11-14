@@ -198,4 +198,35 @@ This lab sits next to the real vendor plugins and PyTorch's own backend test, an
 
 Companions: [`aidless/kv-block-mass`](https://github.com/aidless/kv-block-mass) (a Triton kernel for KV-eviction scoring on CUDA **and** ROCm) and [`aidless/paged-kv`](https://github.com/aidless/paged-kv) (C++ PagedAttention block manager).
 
+## 验收题库与复算
+
+`eval/cases.jsonl` 是 20 条可执行验收题，覆盖六个面：backend 契约（设备重命名、注册幂等、
+越界报错）、op 集（`ast` 现数 39 个 `impl`、缺 kernel 必须响亮失败、`mm` 与
+`add.Tensor` 重载的数值）、三个 hook 的可达性（DeviceGuard 真被 `.to('vlab')` 调到、
+PrivateUse1Hooks 在 Python 层不可达、越界 context 返回 False）、kernels 数值
+（softmax 的 max-shift 在 logits=200 不溢出、softmax/attention 的精确值）、张量视图语义
+（`view`/`detach` 别名、`clone` 拷贝）、分配计数（`zeros(2,3)` 的 24 字节增量）。
+
+20 条里 **17 条是 `expr`/`raises`**：它们真调 `vlab` 的注册/op/kernel/state API，或用 `ast`
+真解析 `src/vlab/ops.py` 数装饰器，期望值全是跑出来的，不是抄文档；剩下 3 条 `doc`
+把 README / `docs/vendor-hooks.md` 里的口径声明钉住（39 kernels、hook 不可达、
+不镜像 `optests.opcheck`），并与 `expr` 题配对——文档改口径、实现没改，两边会同时变红。
+
+```bash
+python3 eval/run_cases.py            # 20/20 cases passed
+python3 eval/run_cases.py --save     # 顺带把结果写进 eval/run-report.json
+python3 eval/run_cases.py --selftest # 篡改一条期望值，必须变红（19/20）
+```
+
+**数字如何复算**：`eval/run-report.json` 里每条 case 带 `id` / `axis` / `detail`，
+`detail` 就是这一跑现算出的值；把它和 `cases.jsonl` 的 `verify` 代码对着看，就能从源码
+重跑出同一个数。例如 `OPS-01` 的 39 来自 `ast` 数 `@torch.library.impl` 装饰器（等价于
+`grep -c '@torch.library.impl' src/vlab/ops.py`），`KER-02` 的 `0.7310585786300049` 是
+`softmax([1.0, 2.0])` 的第二项，`KER-03` 的 `4.075765685479981` 是 attention 输出的首元素，
+`STATE-01` 的 24 是 `2×3×4` 字节。`--save` 重跑一次即可重建整份报告，不需要手工抄数。
+
+**失败归因**：`run_cases.py` 不只报一个通过率，失败时按 `axis` 汇总
+（如 `registration/rename: 1 条 —— REG-01`），直接指出是哪个模块的哪个口径坏了；
+`--selftest` 篡改 REG-01 的期望值后归因行会立刻指向它，证明这套题会失败。
+
 MIT.

@@ -1,0 +1,129 @@
+{
+ "total": 20,
+ "passed": 20,
+ "failed": 0,
+ "selftest": false,
+ "failed_by_axis": {},
+ "results": [
+  {
+   "id": "REG-01",
+   "axis": "registration/rename",
+   "ok": true,
+   "detail": "vlab"
+  },
+  {
+   "id": "REG-02",
+   "axis": "registration/rename",
+   "ok": true,
+   "detail": "vlab"
+  },
+  {
+   "id": "REG-03",
+   "axis": "registration/bounds",
+   "ok": true,
+   "detail": "raised RuntimeError"
+  },
+  {
+   "id": "DOC-01",
+   "axis": "docs/claims",
+   "ok": true,
+   "detail": "39 kernels"
+  },
+  {
+   "id": "DOC-02",
+   "axis": "docs/claims",
+   "ok": true,
+   "detail": "not reached from any python-level path"
+  },
+  {
+   "id": "DOC-03",
+   "axis": "docs/claims",
+   "ok": true,
+   "detail": "optests.opcheck"
+  },
+  {
+   "id": "OPS-01",
+   "axis": "ops/op-count",
+   "ok": true,
+   "detail": "39"
+  },
+  {
+   "id": "OPS-02",
+   "axis": "ops/dispatch",
+   "ok": true,
+   "detail": "raised NotImplementedError"
+  },
+  {
+   "id": "OPS-03",
+   "axis": "ops/dispatch",
+   "ok": true,
+   "detail": "16.0"
+  },
+  {
+   "id": "OPS-04",
+   "axis": "ops/dispatch",
+   "ok": true,
+   "detail": "3.5"
+  },
+  {
+   "id": "HOOK-01",
+   "axis": "hooks/reachability",
+   "ok": true,
+   "detail": "True"
+  },
+  {
+   "id": "HOOK-02",
+   "axis": "hooks/reachability",
+   "ok": true,
+   "detail": "False"
+  },
+  {
+   "id": "HOOK-03",
+   "axis": "hooks/conformance",
+   "ok": true,
+   "detail": "False"
+  },
+  {
+   "id": "KER-01",
+   "axis": "kernels/softmax",
+   "ok": true,
+   "detail": "True"
+  },
+  {
+   "id": "KER-02",
+   "axis": "kernels/softmax",
+   "ok": true,
+   "detail": "0.7310585786300049"
+  },
+  {
+   "id": "KER-03",
+   "axis": "kernels/attention",
+   "ok": true,
+   "detail": "4.075765685479981"
+  },
+  {
+   "id": "TENS-01",
+   "axis": "tensor/views",
+   "ok": true,
+   "detail": "True"
+  },
+  {
+   "id": "TENS-02",
+   "axis": "tensor/views",
+   "ok": true,
+   "detail": "True"
+  },
+  {
+   "id": "TENS-03",
+   "axis": "tensor/views",
+   "ok": true,
+   "detail": "True"
+  },
+  {
+   "id": "STATE-01",
+   "axis": "state/memory",
+   "ok": true,
+   "detail": "24"
+  }
+ ]
+}
