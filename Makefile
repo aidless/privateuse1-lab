@@ -10,3 +10,5 @@ eval:
 	PYTHONPATH=src python3 -m pytest tests/
 	PYTHONPATH=src python3 tests/mutation_gate.py
 	python3 eval/run_cases.py
+	python3 eval/run_cases.py --selftest
+	python3 eval/calibrate_scorer.py

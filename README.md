@@ -229,4 +229,72 @@ python3 eval/run_cases.py --selftest # 篡改一条期望值，必须变红（19
 （如 `registration/rename: 1 条 —— REG-01`），直接指出是哪个模块的哪个口径坏了；
 `--selftest` 篡改 REG-01 的期望值后归因行会立刻指向它，证明这套题会失败。
 
+## 验收判据、统计口径、评分器校准与开销
+
+### 验收判据（什么算「过」）
+
+**验收判据**：`eval/run_cases.py` 通过率 ≥ 1.00（20/20，失败 0 条才算过）；
+`pytest tests/ -q` 必须 ≥ 37 passed 且 0 failed；`tests/mutation_gate.py` 捕获率 ≥ 1.00
+（4/4 注入全被抓、control 4/4 与 CPU oracle 一致）；`run_cases.py --selftest` 必须落到
+19/20（能红才证明题库有效，回到 20/20 即判该自检失效）。四项任一不达即判不通过，
+不设豁免。阈值与下面实跑读数一一对应，改阈值必须同时改这段。
+
+### 统计口径（n 与区间）
+
+| 量 | 实跑读数 | n | Wilson 95% CI |
+|---|---|---:|---|
+| `eval/run_cases.py` 通过率 | 20/20 = 1.000 | n = 20 | [0.839, 1.000] |
+| `pytest tests/ -q` 通过率 | 37/37 = 1.000 | n = 37 | [0.906, 1.000] |
+| `mutation_gate.py` 注入捕获率 | 4/4 = 1.000 | n = 4 | [0.510, 1.000] |
+| `calibrate_scorer.py` 判定一致率 | 20/20 = 1.000 | n = 20 | [0.839, 1.000] |
+
+单点通过率不写「100%」，因为 n 有限：n = 4 的那一行下限只有 0.510，这是注入数少
+的真实代价，不是保守话术。
+
+### 评分器校准（本仓没有 LLM 评委）
+
+本仓**不用模型打分**：唯一的「评委」是 CPU torch 的确定性数值 oracle，
+`tests/mutation_gate.py` 用它判注入是否被抓。所以要做校准的不是「模型会不会漂」，
+而是「换个判定阈值，结论会不会翻」——`eval/calibrate_scorer.py` 就是这一项实测：
+
+- 项集：5 个变体（control + 4 注入）× 4 个 case，**n = 20**，每项现算 `max|Δ|`。
+- 参照判定 D_ref = mutation gate 自己的判定（shape 相等 且 `np.allclose(rtol=1e-5, atol=1e-6)`）。
+- 待校准判定 D_abs(thr) = `max|Δ| > thr`，扫 1e-9 / 1e-6 / 1e-5 / 1e-3 四档。
+
+实测（`python3 eval/calibrate_scorer.py`，报告落盘 `eval/calibration-report.json`）：
+
+```text
+control（无 bug）噪声底：max|Δ| = 5.960e-07（中位 1.341e-07）
+       thr  TP  FP  FN  TN   agree   kappa  ctrl_FP
+     1e-09   5  12   0   3   0.400   0.111 3/4      <- 过紧：float32 噪声被当差异
+     1e-06   5   0   0  15   1.000   1.000 0/4
+     1e-05   5   0   0  15   1.000   1.000 0/4
+     1e-03   5   0   0  15   1.000   1.000 0/4
+```
+
+读法：一致率 1.000 / κ = 1.000（n = 20，control 假阳 0/4）；阈值放宽三个数量级判定不变，
+说明结论不挂在容差上；收紧到 1e-9 时 control 出现 3/4 假阳、κ 掉到 0.111，**噪声底
+5.960e-07 是量出来的下界，不是拍出来的**。另外 11 个「注入 × case」组合的 max|Δ| ≤ 5.96e-07，
+即该注入在那些 case 上数值不可见（如 softmax 的 max-shift 在普通 logits 下不可见），
+这是 gate 已知盲区，逐条列在 `calibration-report.json` 的 `blind_spots` 里。
+`--selftest` 固定用过紧阈值 1e-12，必须报出假阳才 return 3。
+
+### 成本与延迟
+
+本仓**无外部 API、无网络调用、无 token 消耗**：全部计算是本机 numpy + CPU torch，
+所以成本口径是 **0 USD / 0 token**，不是省了钱，而是本来就没有计费面。
+
+墙钟实测（本机 Python 3.12 / torch 2.x，2026-11-13，`/usr/bin/time -f %e`）：
+
+| 命令 | 墙钟 | 备注 |
+|---|---:|---|
+| `PYTHONPATH=src pytest tests/ -q` | 6.31 s | 其中 pytest 自报 `37 passed in 0.59s`，差值主要是 import torch |
+| `python3 eval/run_cases.py` | 2.28 / 2.56 / 3.03 s（3 次，中位 2.56 s） | 20 条 → 128 ms/case |
+| `PYTHONPATH=src python3 tests/mutation_gate.py` | 3.04 s | 4 注入 × 4 case |
+| `python3 eval/calibrate_scorer.py` | 2.27 / 2.35 s（首跑 4.72 s 冷启动） | 20 项 × 4 档阈值 |
+| `make eval`（五项串跑，含两处 selftest） | 14.94 s | 单条命令复现：`time make eval` |
+
+复现命令：`time make eval`（总墙钟）与 `time python3 eval/run_cases.py`（单跑）。
+延迟只在本机 CPU 上有意义；仓里**没有**性能/吞吐 claim（见上文 non-claim）。
+
 MIT.
